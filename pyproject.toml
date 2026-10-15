@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netease-music-linux"
+version = "0.1.0"
+description = "网易云音乐 Linux 原生客户端（PySide6 + mpv）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "PySide6>=6.6",
+    "requests>=2.31",
+    "segno>=1.6",
+]
+
+[project.optional-dependencies]
+# 仅测试用：二维码回环校验（缺失则相关测试 skip）
+test = ["zxing-cpp>=2.2"]
+
+[project.scripts]
+netease-music-linux = "nemusic.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

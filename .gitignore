@@ -1,0 +1,31 @@
+# ---- 明确不入库 ----
+# agent 内部导航与需求规格：用户要求不进版本库
+AGENTS.md
+SPEC.md
+
+# ---- 运行时产物（配置/日志/缓存在 ~/.config，本就不在库内，这里兜底）-----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 绝不入库的凭据/隐私 ----
+cookies.json
+*.cookie
+config.json
+search_history.json
+backgrounds/
+logs/
+cache/
+
+# ---- 编辑器/系统 ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
