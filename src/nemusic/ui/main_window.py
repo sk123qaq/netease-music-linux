@@ -194,6 +194,10 @@ class MainWindow(QMainWindow):
         view.refresh_requested.connect(lambda: self.library.reload(force=True))
         self.library.like_changed.connect(self._on_like_changed)
         self.controller.like_changed.connect(view.set_liked)
+        # library 是“已收藏”的唯一权威：播放条/搜索页/详情页的 ♥ 都问它，
+        # 收藏结果回包后再把状态写回 library（否则取消收藏后重新渲染又变实心）。
+        self.controller.set_like_checker(self.library.is_liked)
+        self.controller.like_changed.connect(self.library.set_liked)
 
     def _wire_entity(self) -> None:
         """专辑/歌单/歌手详情页（AC-2.4）。"""
@@ -203,6 +207,7 @@ class MainWindow(QMainWindow):
         view.play_all_requested.connect(lambda: self.controller.play_songs(view.songs(), 0, context=view.lbl_title.text()))
         view.back_requested.connect(lambda: self.show_page("search"))
         self.controller.like_changed.connect(view.set_liked)
+        view.set_like_checker(self.library.is_liked)
 
     def _wire_search(self) -> None:
         """搜索页 ↔ 播放控制器。"""
@@ -211,6 +216,7 @@ class MainWindow(QMainWindow):
         view.like_toggled.connect(lambda song, desired: self.controller.set_like(song, desired))
         view.open_entity.connect(self._open_entity)
         self.controller.like_changed.connect(self._on_like_changed)
+        view.set_like_checker(self.library.is_liked)
 
     def _play_search_result(self, items: list, index: int) -> None:
         keyword = self.search_state.keyword or ""

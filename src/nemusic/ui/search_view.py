@@ -199,9 +199,15 @@ class SearchView(QWidget):
         self._tables: dict[int, _ResultTable] = {}
         self._like_buttons: dict[int, dict[int, _LikeButton]] = {}
         self._is_liked: dict[int, bool] = {}
+        #: 已收藏状态的外部来源（由 main_window 接 library.is_liked；None 表示未知）
+        self._like_checker = None
 
         self._build()
         self._wire()
+
+    def set_like_checker(self, checker) -> None:
+        """指定“这首歌是否已收藏”的查询函数（返回 None 表示未知）。"""
+        self._like_checker = checker
 
     # ============================================================ 构建
     def _build(self) -> None:
@@ -516,9 +522,17 @@ class SearchView(QWidget):
             self._set_empty_hint(items)
             self._set_footer(state.count, state.total, state.loading, state.finished)
 
+    def _liked_of(self, song_id: int) -> bool:
+        """本地乐观缓存优先，其次问 library（已收藏的歌一开始就该是实心红心）。"""
+        if song_id in self._is_liked:
+            return bool(self._is_liked[song_id])
+        if self._like_checker is None:
+            return False
+        return bool(self._like_checker(song_id))
+
     # ---------------------------------------------------------- 各 tab 的行
     def _fill_song_row(self, table: _ResultTable, row: int, song: Song) -> None:
-        liked = self._is_liked.get(song.id, False)
+        liked = self._liked_of(song.id)
         table.setItem(row, 0, table._text(str(row + 1), Qt.AlignCenter, 0))
         table.setItem(row, 1, table._text(song.name, Qt.AlignVCenter, 1))
         table.setItem(row, 2, table._text(song.artist_text, Qt.AlignVCenter, 2))

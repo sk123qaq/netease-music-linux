@@ -37,8 +37,14 @@ class EntityView(QWidget):
         super().__init__(parent)
         self.kind = ""
         self.entity_id = 0
+        #: 已收藏状态的外部来源（由 main_window 接 library.is_liked；None 表示未知）
+        self._like_checker = None
         self._build()
         self._wire()
+
+    def set_like_checker(self, checker) -> None:
+        """指定“这首歌是否已收藏”的查询函数（返回 None 表示未知）。"""
+        self._like_checker = checker
 
     # ============================================================ 构建
     def _build(self) -> None:
@@ -94,7 +100,13 @@ class EntityView(QWidget):
         self.lbl_sub.setText(subtitle)
         self.lbl_hint.setText("双击任意一首开始播放" if songs else "这个列表没有可播放的歌曲")
         self.btn_play_all.setEnabled(bool(songs))
-        self.table.set_songs(songs)
+        self.table.set_songs(songs, self._liked_map(songs))
+
+    def _liked_map(self, songs: list[Song]) -> dict[int, bool]:
+        """已收藏的歌直接画实心红心（数据源由 main_window 接 library.is_liked）。"""
+        if self._like_checker is None:
+            return {}
+        return {song.id: bool(self._like_checker(song.id)) for song in songs}
 
     def set_songs(self, songs: list[Song]) -> None:
         """只换曲目（保留标题/kind），登出清空时用。"""
