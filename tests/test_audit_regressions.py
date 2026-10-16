@@ -152,7 +152,7 @@ def _controller(*, url_result: SongUrl | None = None, cache=None, api=None):
             return None
 
         def song_url_best(self, song_id, ladder=None) -> SongUrl:
-            return url_result or SongUrl(song_id=song_id, playable=False, code=460, message="无版权")
+            return url_result or SongUrl(song_id=song_id, code=460, message="无版权")
 
     ctl = PlaybackController(  # type: ignore[arg-type]
         api or _Api(), Config.load(), cache or _NoCache(), _FakeSessionState(), player=_FakePlayer()
@@ -256,7 +256,7 @@ class TestLateFailureDoesNotStopCurrentSong(unittest.TestCase):
 
             def song_url_best(self, song_id, ladder=None) -> SongUrl:
                 time.sleep(0.45)  # a 的取流慢慢失败
-                return SongUrl(song_id=song_id, playable=False, code=460, message="无版权")
+                return SongUrl(song_id=song_id, code=460, message="无版权")
 
         class _Cache(_NoCache):
             def audio_lookup(self, song_id):
@@ -275,6 +275,77 @@ class TestLateFailureDoesNotStopCurrentSong(unittest.TestCase):
 
         self.assertTrue(ctl.playing, "正在正常播放的 b 被别的歌的迟到失败停掉了")
         self.assertEqual(ctl.current_song.id, fast.id)
+        self.assertEqual(notices, [])
+
+    def test_late_failure_of_previous_song_is_silent(self) -> None:
+        """迟到的**异常**回包也不能弹错（取流异常分支原先没有丢弃判断）。"""
+        slow = Song(id=1, name="a")
+        fast = Song(id=2, name="b")
+
+        class _Api:
+            def like(self, *_args, **_kwargs) -> None:
+                return None
+
+            def song_url_best(self, song_id, ladder=None) -> SongUrl:
+                time.sleep(0.45)
+                raise RuntimeError("取流超时")
+
+        class _Cache(_NoCache):
+            def audio_lookup(self, song_id):
+                return Path("/tmp/nemusic-cached-b.mp3") if song_id == fast.id else None
+
+        ctl = _controller(cache=_Cache(), api=_Api())
+        self.addCleanup(ctl.shutdown)
+        errors: list[str] = []
+        ctl.error.connect(errors.append)
+
+        ctl.play_songs([slow, fast], 0, context="用例")
+        ctl.play_at(1)
+        time.sleep(0.8)
+        self.app.processEvents()
+
+        self.assertEqual(errors, [], "正在播放的 b 不应该收到 a 的失败提示")
+
+
+class TestSameSongRefetch(unittest.TestCase):
+    """同一首歌反复点（a → b → a）时，上一轮的回包不能算到本轮头上。"""
+
+    def setUp(self) -> None:
+        redirect_config()
+        self.app = qt_app()
+
+    def test_old_response_of_same_song_is_ignored(self) -> None:
+        first = Song(id=1, name="a")
+        other = Song(id=2, name="b")
+        calls = {"n": 0}
+
+        class _Api:
+            def like(self, *_args, **_kwargs) -> None:
+                return None
+
+            def song_url_best(self, song_id, ladder=None) -> SongUrl:
+                calls["n"] += 1
+                if calls["n"] == 1:  # 第一次给 a 取流：慢，而且失败
+                    time.sleep(0.6)
+                    return SongUrl(song_id=song_id, code=460, message="无版权")
+                time.sleep(0.05)
+                return SongUrl(song_id=song_id, url="https://example.invalid/x.mp3",
+                               level="standard", br=128000, size=1000, type="mp3")
+
+        ctl = _controller(api=_Api())
+        self.addCleanup(ctl.shutdown)
+        notices: list[str] = []
+        ctl.notice.connect(notices.append)
+        ctl.set_mode("single_loop")
+
+        ctl.play_songs([first, other], 0, context="用例")  # a 的第一次取流在飞（慢+失败）
+        ctl.play_at(1)  # 用户切到 b
+        ctl.play_at(0)  # 又点回 a（这一次取流成功）
+        time.sleep(1.0)  # 等第一次的回包迟到落地
+        self.app.processEvents()
+
+        self.assertEqual(ctl.current_song.id, first.id, "被上一轮的回包弹走了")
+        self.assertTrue(ctl.playing)
         self.assertEqual(notices, [])
 
 
