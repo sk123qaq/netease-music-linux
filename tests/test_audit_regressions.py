@@ -116,9 +116,13 @@ class _FakePlayer:
     def __init__(self) -> None:
         for name in ("position_changed", "duration_changed", "paused_changed", "ended", "failed", "ready"):
             setattr(self, name, _FakeSignal())
+        self.loads: list[str] = []
 
     def start(self) -> None:
         pass
+
+    def load(self, target, record_to=None, start_ms=0) -> None:
+        self.loads.append(str(target))
 
     def stop(self) -> None:
         pass
@@ -138,7 +142,7 @@ class _FakeSessionState:
     uid = 42
 
 
-def _controller(*, url_result: SongUrl | None = None):
+def _controller(*, url_result: SongUrl | None = None, cache=None, api=None):
     """离线播放控制器：取流结果由调用方给定。"""
     from nemusic.config import Config
     from nemusic.player.controller import PlaybackController
@@ -151,7 +155,7 @@ def _controller(*, url_result: SongUrl | None = None):
             return url_result or SongUrl(song_id=song_id, playable=False, code=460, message="无版权")
 
     ctl = PlaybackController(  # type: ignore[arg-type]
-        _Api(), Config.load(), _NoCache(), _FakeSessionState(), player=_FakePlayer()
+        api or _Api(), Config.load(), cache or _NoCache(), _FakeSessionState(), player=_FakePlayer()
     )
     return ctl
 
@@ -233,6 +237,45 @@ class TestUnplayableSongDoesNotSpin(unittest.TestCase):
         counts = self._run([Song(id=1, name="a"), Song(id=2, name="b"), Song(id=3, name="c")])
         self.assertFalse(counts["playing"])
         self.assertLessEqual(counts["changed"], 3, "跑完一轮就该停，不能循环重来")
+
+
+class TestLateFailureDoesNotStopCurrentSong(unittest.TestCase):
+    """别的歌的迟到失败回包，不能把用户正在听的这首算成“失败”。"""
+
+    def setUp(self) -> None:
+        redirect_config()
+        self.app = qt_app()
+
+    def test_late_failure_of_previous_song_does_not_stop_playback(self) -> None:
+        slow = Song(id=1, name="a")
+        fast = Song(id=2, name="b")
+
+        class _Api:
+            def like(self, *_args, **_kwargs) -> None:
+                return None
+
+            def song_url_best(self, song_id, ladder=None) -> SongUrl:
+                time.sleep(0.45)  # a 的取流慢慢失败
+                return SongUrl(song_id=song_id, playable=False, code=460, message="无版权")
+
+        class _Cache(_NoCache):
+            def audio_lookup(self, song_id):
+                return Path("/tmp/nemusic-cached-b.mp3") if song_id == fast.id else None
+
+        ctl = _controller(cache=_Cache(), api=_Api())
+        self.addCleanup(ctl.shutdown)
+        notices: list[str] = []
+        ctl.notice.connect(notices.append)
+        ctl.set_mode("single_loop")
+
+        ctl.play_songs([slow, fast], 0, context="用例")  # a 的取流在飞
+        ctl.play_at(1)  # 用户马上双击了 b（b 命中缓存）
+        time.sleep(0.8)  # 等 a 的失败回包落地
+        self.app.processEvents()
+
+        self.assertTrue(ctl.playing, "正在正常播放的 b 被别的歌的迟到失败停掉了")
+        self.assertEqual(ctl.current_song.id, fast.id)
+        self.assertEqual(notices, [])
 
 
 class TestLikedStateInUi(unittest.TestCase):
