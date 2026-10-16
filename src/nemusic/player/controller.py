@@ -335,7 +335,7 @@ class PlaybackController(QObject):
         if exc is not None:
             _log.info("取流失效：%s（%s）", song.name, exc)
             self.error.emit(f"获取播放地址失败：{getattr(exc, 'user_message', exc)}")
-            self._auto_next_after_failure()
+            self._auto_next_after_failure(song)
             return
         assert result is not None
         _log.info("取流结果：%s playable=%s code=%s level=%s", song.name, result.playable, result.code, result.level)
@@ -343,7 +343,7 @@ class PlaybackController(QObject):
             return  # 期间已切歌，丢弃
         if not result.playable:
             self.error.emit(f"《{song.name}》无法播放：{result.message or '无版权或需要会员'}")
-            self._auto_next_after_failure()
+            self._auto_next_after_failure(song)
             return
         self._play_url(song, result)
 
@@ -393,13 +393,20 @@ class PlaybackController(QObject):
         if result is not None:
             _log.info("已预取地址：song=%s level=%s", song_id, result.level)
 
-    def _auto_next_after_failure(self) -> None:
+    def _auto_next_after_failure(self, failed: Song | None = None) -> None:
         """播放失败后的兜底：往后找一首**这次没失败过**的；都试过了就停下并提示。
+
+        ``failed`` 是失败的那首歌。取流是异步的，回包可能比用户切歌晚到：
+        那不是当前这首的失败，直接丢掉（否则会把正在正常播放的这首算成失败）。
 
         order 之外的三种模式都能绕回同一个索引（单曲循环/列表循环/随机），
         所以不能只看“next_index() 不是 None”就继续：所有候选都不可播时会原地重试
         （真机量到 1 秒 271 次 error 信号 + 272 次 song_changed）。
         """
+        current = self.current_song
+        if failed is not None and (current is None or failed.id != current.id):
+            _log.debug("丢弃迟到的失败回包：song=%s（当前 %s）", failed.id, current.id if current else None)
+            return
         if 0 <= self.queue.index < len(self.queue):
             self._failed_indexes.add(self.queue.index)
         index = self.queue.next_index()
