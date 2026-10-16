@@ -163,7 +163,9 @@ class Playlist:
         return self.special_type == 5
 
     @classmethod
-    def from_api(cls, raw: dict, *, with_tracks: bool = False) -> "Playlist":
+    def from_api(cls, raw: dict, *, with_tracks: bool = False, privileges: Iterable[dict] | None = None) -> "Playlist":
+        """``privileges`` 在 playlist/detail 响应里是 ``playlist`` 的**兄弟键**，
+        不在 playlist 对象里；调用方拿到顶层那份后从这里传进来（见 api.playlist_detail）。"""
         creator_raw = raw.get("creator") or {}
         pl = cls(
             id=int(raw.get("id") or 0),
@@ -180,7 +182,8 @@ class Playlist:
         tids = raw.get("trackIds") or []
         pl.track_ids = [int(t.get("id") or 0) for t in tids if isinstance(t, dict) and t.get("id")]
         if with_tracks and raw.get("tracks"):
-            pl.tracks = Song.list_from_api(raw["tracks"], raw.get("privileges"))
+            privs = list(privileges) if privileges is not None else raw.get("privileges")
+            pl.tracks = Song.list_from_api(raw["tracks"], privs)
         return pl
 
 
