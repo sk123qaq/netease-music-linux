@@ -121,7 +121,18 @@ _NO_LYRIC_HINTS = ("纯音乐", "純音樂", "暂无歌词", "无歌词", "没�
 
 
 def _is_placeholder(lines: list[LyricLine]) -> bool:
-    return bool(lines) and all(any(hint in line.text for hint in _NO_LYRIC_HINTS) for line in lines)
+    """纯音乐 / 暂无歌词这类占位文本。
+
+    真机形态（歌曲 2038191895）：占位行在**第 1 行**，后面跟着曲尾制作名单
+    （钢琴 : 邓垚 / 出品：网易云音乐 …）。旧判据要求**每一行**都是占位词（all），
+    于是 19 行制作名单被当成滚动歌词、"暂无歌词"提示永不出现。
+    现在的判据：首行命中即算占位，或整篇都是占位词。
+    """
+    if not lines:
+        return False
+    if any(hint in lines[0].text for hint in _NO_LYRIC_HINTS):
+        return True
+    return all(any(hint in line.text for hint in _NO_LYRIC_HINTS) for line in lines)
 
 
 def parse_payload(song_id: int, payload: dict[str, Any] | None) -> LyricDoc:
