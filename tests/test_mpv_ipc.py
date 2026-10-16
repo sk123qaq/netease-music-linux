@@ -91,12 +91,13 @@ class TestMpvIpc(unittest.TestCase):
         positions: list[float] = []
         player.position_changed.connect(positions.append)
         loaded: list[str] = []
-        player.file_loaded.connect(lambda p: loaded.append(p or "loaded"))
+        player.file_loaded.connect(loaded.append)
         self.assertTrue(player.start())
         self.assertTrue(wait_until(self.app, lambda: player._connected, 8000))
         player.load(str(self.tone))
         self.assertTrue(wait_until(self.app, lambda: any(p > 0.3 for p in positions), 15000), f"位置应推进：{positions[-3:]}")
         self.assertTrue(loaded)
+        self.assertEqual(loaded[-1], str(self.tone), "file_loaded 要报告真正加载的文件路径")
 
     def test_stream_record_writes_with_valid_extension(self) -> None:
         """AC-5.1：边播边存必须真的落盘（正确扩展名）。"""
