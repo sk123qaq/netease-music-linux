@@ -84,6 +84,8 @@ class PlaybackController(QObject):
         self._seeked = False
         self._record: tuple | None = None  # (part_path, song_id, level, ext, expected_size)
         self._prefetch: dict[int, SongUrl] = {}
+        #: 本次播放里已经失败过的队列索引（防止失败兜底原地打转，见 _auto_next_after_failure）
+        self._failed_indexes: set[int] = set()
         self._liked: dict[int, bool] = {}
         #: 兜底清扫：清掉切歌竞态产生的孤儿临时文件（见 CacheManager.sweep_parts）
         self._sweeper = QTimer(self)
@@ -143,6 +145,7 @@ class PlaybackController(QObject):
             self.error.emit("没有可播放的歌曲")
             return
         index = max(0, min(index, len(items) - 1))
+        self._failed_indexes.clear()
         self.queue.set_items(items, index)
         self.queue_changed.emit()
         if context:
@@ -167,6 +170,7 @@ class PlaybackController(QObject):
         """停下并丢掉当前曲目/队列（登出用）：不再有"当前歌曲"，也不会自动续播。"""
         self.queue.clear()
         self._liked = {}
+        self._failed_indexes.clear()
         self._seeked = False
         self._duration_ms = 0
         self._playing = False
@@ -288,6 +292,7 @@ class PlaybackController(QObject):
         cached = self.cache.audio_lookup(song.id)
         if cached is not None:
             _log.info("缓存命中，直接播放本地文件：%s", cached.name)
+            self._failed_indexes.clear()
             self.cache_event.emit(song.id, "hit")
             self.source_changed.emit(song.id, "", 0, "cache")
             self.player.load(str(cached))
@@ -353,6 +358,7 @@ class PlaybackController(QObject):
         else:
             self._record = None
         _log.info("开始播放：%s（%s %dkbps，%s）", song.name, result.level or "?", result.br // 1000, "缓存中" if record_to else "不缓存")
+        self._failed_indexes.clear()
         self.source_changed.emit(song.id, result.level, result.br, "cache-part" if record_to else "stream")
         self.player.load(result.url or "", record_to=record_to)
         self._playing = True
@@ -388,12 +394,27 @@ class PlaybackController(QObject):
             _log.info("已预取地址：song=%s level=%s", song_id, result.level)
 
     def _auto_next_after_failure(self) -> None:
-        """播放失败后的兜底：还有下一首就继续，否则停下来（不静默）。"""
-        if self.queue.next_index() is None:
+        """播放失败后的兜底：往后找一首**这次没失败过**的；都试过了就停下并提示。
+
+        order 之外的三种模式都能绕回同一个索引（单曲循环/列表循环/随机），
+        所以不能只看“next_index() 不是 None”就继续：所有候选都不可播时会原地重试
+        （真机量到 1 秒 271 次 error 信号 + 272 次 song_changed）。
+        """
+        if 0 <= self.queue.index < len(self.queue):
+            self._failed_indexes.add(self.queue.index)
+        index = self.queue.next_index()
+        candidate = index is not None and 0 <= index < len(self.queue)
+        if not candidate:
             self._playing = False
             self.playing_changed.emit(False)
-        else:
-            self.next()
+            return
+        if index in self._failed_indexes:
+            self._playing = False
+            self.playing_changed.emit(False)
+            # 单曲失败的具体原因已经由调用方报过，这里只补一句“整列都不行”，不再弹第二个错
+            self.notice.emit("列表里没有可播放的歌曲")
+            return
+        self.next()
 
     # ============================================================ mpv 回调
     def _on_player_ready(self) -> None:
