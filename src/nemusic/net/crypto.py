@@ -170,6 +170,12 @@ def eapi_path(api_path: str) -> str:
 # ---------------------------------------------------------------- 自检
 
 
+def _expect(got: str, want: str, label: str) -> None:
+    """显式 raise：``-O`` 会删掉 assert，而 app.build_app() 靠它做启动校验。"""
+    if got != want:
+        raise AssertionError(f"{label} 向量不匹配: {got}")
+
+
 def selftest() -> None:
     """用标准向量校验 AES 实现，失败抛 AssertionError。
 
@@ -177,15 +183,13 @@ def selftest() -> None:
     """
     key = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
     plain = bytes.fromhex("00112233445566778899aabbccddeeff")
-    got = encrypt_block(plain, _expand_key(key)).hex()
-    assert got == "69c4e0d86a7b0430d8cdb78070b4c55a", f"FIPS-197 ECB 向量不匹配: {got}"
+    _expect(encrypt_block(plain, _expand_key(key)).hex(), "69c4e0d86a7b0430d8cdb78070b4c55a", "FIPS-197 ECB")
 
     cbc_key = bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c")
     iv = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
     blk = bytes.fromhex("6bc1bee22e409f96e93d7e117393172a")
     # 单分组 CBC = 先异或 IV 再加密；用 pkcs7 补齐后取前 16 字节比较
-    got_cbc = aes_cbc_encrypt(cbc_key, iv, blk)[:16].hex()
-    assert got_cbc == "7649abac8119b246cee98e9b12e9197d", f"NIST CBC 向量不匹配: {got_cbc}"
+    _expect(aes_cbc_encrypt(cbc_key, iv, blk)[:16].hex(), "7649abac8119b246cee98e9b12e9197d", "NIST CBC")
 
 
 if __name__ == "__main__":  # python -m nemusic.net.crypto

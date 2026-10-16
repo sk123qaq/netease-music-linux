@@ -245,9 +245,12 @@ class Session:
                     text, status = resp.text, resp.status_code
                 else:  # pragma: no cover - 回退路径
                     text, status = _urllib_request(method, url, data, params, self._headers())
-                if attempt == 0 or status < 500:
-                    self._sync_jar_to_cache()
-                    self.save_cookies()
+                if status >= 500 and attempt < config.MAX_RETRY:
+                    _log.debug("服务端 %s，重试 %s（第 %d 次）", status, tag, attempt + 2)
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                self._sync_jar_to_cache()
+                self.save_cookies()
                 return text, status
             except Exception as exc:  # requests.RequestException 等
                 last_exc = exc
@@ -277,7 +280,7 @@ class Session:
             json.loads(text)
         except json.JSONDecodeError:
             return True
-        return any(hint in text for hint in _EAPI_RETRY_HINTS) and "参数错误" in text
+        return any(hint in text for hint in _EAPI_RETRY_HINTS)
 
     def _parse(self, text: str, tag: str, status: int, ok_codes: set[int] | None = None) -> dict[str, Any]:
         if not text.strip():
