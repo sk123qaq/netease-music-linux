@@ -71,6 +71,10 @@ class MainWindow(QMainWindow):
         self.lyrics = LyricState(api, self.cache)
         self.search_state = SearchState(api, self, history=self.history)
         self.library = LibraryState(api, self.session_state, self)
+        #: 详情页请求号：迟到的回包既不能抢页面，也不能开始播放（同一个 _pending_entity
+        #: 只能被最新一次请求认领，见 _open_entity/_on_entity_loaded）
+        self._entity_request = 0
+        self._pending_entity: tuple[str, int] = ("", 0)
 
         self.setWindowTitle(APP_TITLE)
         self.resize(*config.window_geometry[2:4])
@@ -228,16 +232,19 @@ class MainWindow(QMainWindow):
             return
         label = KIND_LABELS[kind]
         self.notice(f"正在载入{label}曲目…")
+        self._entity_request += 1
+        request = self._entity_request
+        origin = self.stack.currentIndex()  # 发起时用户停在哪一页
         self._pending_entity = (kind, entity_id)
 
-        def work() -> tuple[str, list, str, str]:
+        def work() -> tuple:
+            """回包里带请求号与发起页（见 async_task 坑 2：所有跨线程数据都随返回值带回）。"""
             try:
                 if kind == "artist":
-                    songs = self.api.artist_top_songs(entity_id)
-                    return kind, songs, "", ""
+                    return request, origin, kind, self.api.artist_top_songs(entity_id), "", ""
                 if kind == "album":
                     album, songs = self.api.album_songs(entity_id)
-                    return kind, songs, album.name, album.artist
+                    return request, origin, kind, songs, album.name, album.artist
                 detail = self.api.playlist_detail(entity_id, limit=1000)
                 songs = list(detail.tracks)
                 known = {s.id for s in songs}
@@ -248,23 +255,29 @@ class MainWindow(QMainWindow):
                         songs.extend(self.api.song_detail(batch))
                 order = {sid: i for i, sid in enumerate(detail.track_ids)}
                 songs.sort(key=lambda s: order.get(s.id, len(order)))
-                return kind, songs, detail.name, detail.creator
+                return request, origin, kind, songs, detail.name, detail.creator
             except Exception as exc:  # noqa: BLE001 - 交给主线程统一提示
-                return kind, exc, "", ""  # type: ignore[list-item]
+                return request, origin, kind, exc, "", ""  # type: ignore[return-value]
 
         task = AsyncTask(work)
         task.done.connect(self._on_entity_loaded)
         task.start()
 
     def _on_entity_loaded(self, payload: tuple) -> None:
-        kind, songs, title, subtitle = payload
+        request, origin, kind, songs, title, subtitle = payload
+        if request != self._entity_request:
+            _log.debug("丢弃过期的详情页回包：request=%s（当前 %s）", request, self._entity_request)
+            return  # 用户又点了别的实体，这份不是最新的
+        if self.stack.currentIndex() != origin:
+            _log.debug("用户已离开发起页，丢弃详情页回包：request=%s", request)
+            return  # 用户已经切走，不能把人拽回来播放
         if isinstance(songs, Exception):
             self.notice(f"载入失败：{getattr(songs, 'user_message', songs)}", warn=True)
             return
         if not songs:
             self.notice("这个列表没有可播放的歌曲", warn=True)
             return
-        kind, entity_id = getattr(self, "_pending_entity", (kind, 0))
+        kind, entity_id = self._pending_entity
         count = f"{len(songs)} 首"
         sub = " / ".join(p for p in (subtitle, count) if p)
         self.entity_view.set_entity(kind, entity_id, title or KIND_LABELS.get(kind, "详情"), sub, songs)
