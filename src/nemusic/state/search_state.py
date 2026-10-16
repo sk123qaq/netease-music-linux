@@ -122,11 +122,10 @@ class SearchState(QObject):
 
     def clear(self, search_type: int | None = None) -> None:
         """清空结果（换 tab/清空搜索框时用）。"""
-        for tab in ([self.tabs[search_type]] if search_type else self.tabs.values()):
+        targets = {search_type: self.tabs[search_type]} if search_type else dict(self.tabs)
+        for kind, tab in targets.items():
             tab.reset()
-            self.loading_changed.emit(list(self.tabs).index(tab) if False else 0, False, False)
-        if search_type:
-            self.loading_changed.emit(search_type, False, False)
+            self.loading_changed.emit(kind, False, False)
         self.keyword = ""
 
     # ============================================================ 内部

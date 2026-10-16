@@ -161,11 +161,11 @@ class TrackTable(QTableWidget):
         self.setRowCount(0)
         self.setRowCount(len(self.songs))
         for row, song in enumerate(self.songs):
-            self.setItem(row, 0, self._text(str(row + 1), Qt.AlignCenter, "#8f8f95"))
-            self.setItem(row, 1, self._text(song.name, Qt.AlignVCenter, "#f0f0f2"))
-            self.setItem(row, 2, self._text(song.artist_text, Qt.AlignVCenter, "#b8b8be"))
-            self.setItem(row, 3, self._text(song.album, Qt.AlignVCenter, "#b8b8be"))
-            self.setItem(row, 4, self._text(song.duration_text, Qt.AlignCenter, "#8f8f95"))
+            self.setItem(row, 0, self._text(str(row + 1), Qt.AlignCenter, 0))
+            self.setItem(row, 1, self._text(song.name, Qt.AlignVCenter, 1))
+            self.setItem(row, 2, self._text(song.artist_text, Qt.AlignVCenter, 2))
+            self.setItem(row, 3, self._text(song.album, Qt.AlignVCenter, 3))
+            self.setItem(row, 4, self._text(song.duration_text, Qt.AlignCenter, 4))
             button = _LikeButton(song, bool(self._liked.get(song.id)))
             button.clicked.connect(lambda _=None, s=song, b=button: self._on_like(s, b))
             self.setCellWidget(row, 5, button)
@@ -211,6 +211,7 @@ class TrackTable(QTableWidget):
                 item.setFont(font)
 
     def _text(self, value: str, align, column: int) -> QTableWidgetItem:
+        """``column`` 是列号（不是颜色）：文字色从 palette 取，见 _ink。"""
         item = QTableWidgetItem(value)
         item.setTextAlignment(int(align))
         item.setForeground(self._ink(column))

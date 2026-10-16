@@ -8,8 +8,9 @@
 1. 网易云的时间戳既有 ``[mm:ss.xx]`` 也有 ``[mm:ss:xx]``（百分号前是冒号），
    早期文件还见过 ``[mm:ss.xxx]`` 三位毫秒；
 2. 一行可以挂多个时间戳 ``[00:01.00][00:05.00]同一句``，要拆成两行；
-3. 纯音乐返回 ``[00:00.00]纯音乐，请欣赏``，无有效时间戳的整段纯文本按
-   "无滚动歌词"处理（全部挂在 0ms，界面给提示，不做滚动）。
+3. 纯音乐返回 ``[00:00.00]纯音乐，请欣赏``，按无滚动歌词处理（界面给提示）；
+   完全不带时间戳的 payload 也存在（整篇只有「作词 : xx」这类制作信息），
+   这些行归到 credits 置顶显示，其余无时间戳杂行忽略。
 """
 
 from __future__ import annotations
@@ -75,7 +76,13 @@ def parse_lrc(text: str) -> tuple[list[LyricLine], list[str]]:
             continue
         stamps = list(_TIME_RE.finditer(line))
         if not stamps:
-            continue  # 无时间戳的杂行（多半是说明文字），忽略
+            # 真机存在整篇不带时间戳的 payload，行内容就是制作信息（作词/作曲…）：
+            # 归到 credits 置顶显示，不要整行丢掉；其余无时间戳杂行仍忽略。
+            if _CREDIT_RE.match(line):
+                text = " ".join(line.split())
+                if text not in credits:
+                    credits.append(text)
+            continue
         body = _TIME_RE.sub("", line).strip()
         for m in stamps:
             lines.append(LyricLine(time_ms=_to_ms(m.group(1), m.group(2), m.group(3)), text=body))
