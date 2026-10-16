@@ -166,10 +166,9 @@ class PlaybackController(QObject):
     def stop(self) -> None:
         """停下并丢掉当前曲目/队列（登出用）：不再有"当前歌曲"，也不会自动续播。"""
         self.queue.clear()
-        self._liked = set()
+        self._liked = {}
         self._seeked = False
         self._duration_ms = 0
-        self._current = None
         self._playing = False
         try:
             self.player.stop()

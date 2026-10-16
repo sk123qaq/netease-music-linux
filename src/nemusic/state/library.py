@@ -150,7 +150,7 @@ class LibraryState(QObject):
         self._generation += 1  # 丢弃还在飞的请求
         self.songs = []
         self.playlist = None
-        self.liked = set()
+        self.liked = {}
         self.playlist_changed.emit(None)
         self.songs_loaded.emit([])
 
