@@ -16,8 +16,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 AGENTS = ROOT / "AGENTS.md"
 
-#: 表格首列里的 `路径` 或 `a/{b,c}.py`；只认带扩展名或含斜杠的项
-_PATH_RE = re.compile(r"^`([^`]+)`$|^`([^`]+)`\s*\|\s*([^|]*)\|")
 _DONE_MARKS = ("✅", "🚧")
 _PLAN_MARK = "📝"
 
@@ -48,7 +46,8 @@ def main() -> int:
         if len(cells) < 2:
             continue
         first, last = cells[0], cells[-1]
-        m = re.match(r"^`([^`]+)`$", first)
+        # 首列可以带注解（如「`x.py` 依赖」），取第一个反引号路径
+        m = re.match(r"^`([^`]+)`", first)
         if not m:
             continue
         entry = m.group(1)

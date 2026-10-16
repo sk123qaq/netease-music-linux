@@ -199,9 +199,15 @@ class SearchView(QWidget):
         self._tables: dict[int, _ResultTable] = {}
         self._like_buttons: dict[int, dict[int, _LikeButton]] = {}
         self._is_liked: dict[int, bool] = {}
+        #: 已收藏状态的外部来源（由 main_window 接 library.is_liked；None 表示未知）
+        self._like_checker = None
 
         self._build()
         self._wire()
+
+    def set_like_checker(self, checker) -> None:
+        """指定“这首歌是否已收藏”的查询函数（返回 None 表示未知）。"""
+        self._like_checker = checker
 
     # ============================================================ 构建
     def _build(self) -> None:
@@ -315,6 +321,16 @@ class SearchView(QWidget):
         self.input.returnPressed.connect(self._do_search)
         self.input.textEdited.connect(self._maybe_show_history)
         self.input.installEventFilter(self)
+        for search_type, button in self.tab_buttons.items():
+            button.clicked.connect(lambda _checked=False, t=search_type: self._switch_tab(t))
+        for search_type, table in self._tables.items():
+            table.reached_bottom.connect(lambda t=search_type: self.state.load_more(t))
+            table.cellDoubleClicked.connect(lambda row, col, t=search_type: self._on_row_activated(t, row))
+            table.itemSelectionChanged.connect(lambda t=search_type: self._clear_selection(t))
+        self.state.page_loaded.connect(self._on_page_loaded)
+        self.state.loading_changed.connect(self._on_loading_changed)
+        self.state.search_failed.connect(self._on_failed)
+        self.history_popup.itemClicked.connect(self._on_history_clicked)
         # 真机踩过：历史下拉用 Qt.Popup 会**抢走鼠标**
         # （现象：点"我喜欢的音乐"没反应，只能点搜索框或某条历史）。
         # 现在改成非模态工具窗 + "点在别处就关"（见 showEvent/hideEvent/eventFilter）。
@@ -336,17 +352,6 @@ class SearchView(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.removeEventFilter(self)
-        for search_type, button in self.tab_buttons.items():
-            button.clicked.connect(lambda _checked=False, t=search_type: self._switch_tab(t))
-        for search_type, table in self._tables.items():
-            table.reached_bottom.connect(lambda t=search_type: self.state.load_more(t))
-            table.cellDoubleClicked.connect(lambda row, col, t=search_type: self._on_row_activated(t, row))
-            table.itemSelectionChanged.connect(lambda t=search_type: self._clear_selection(t))
-
-        self.state.page_loaded.connect(self._on_page_loaded)
-        self.state.loading_changed.connect(self._on_loading_changed)
-        self.state.search_failed.connect(self._on_failed)
-        self.history_popup.itemClicked.connect(self._on_history_clicked)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.input and event.type() == QEvent.FocusIn:
@@ -517,9 +522,17 @@ class SearchView(QWidget):
             self._set_empty_hint(items)
             self._set_footer(state.count, state.total, state.loading, state.finished)
 
+    def _liked_of(self, song_id: int) -> bool:
+        """本地乐观缓存优先，其次问 library（已收藏的歌一开始就该是实心红心）。"""
+        if song_id in self._is_liked:
+            return bool(self._is_liked[song_id])
+        if self._like_checker is None:
+            return False
+        return bool(self._like_checker(song_id))
+
     # ---------------------------------------------------------- 各 tab 的行
     def _fill_song_row(self, table: _ResultTable, row: int, song: Song) -> None:
-        liked = self._is_liked.get(song.id, False)
+        liked = self._liked_of(song.id)
         table.setItem(row, 0, table._text(str(row + 1), Qt.AlignCenter, 0))
         table.setItem(row, 1, table._text(song.name, Qt.AlignVCenter, 1))
         table.setItem(row, 2, table._text(song.artist_text, Qt.AlignVCenter, 2))

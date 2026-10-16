@@ -58,14 +58,17 @@ def complete(state: SearchState, api: FakeApi, timeout: float = 5.0) -> None:
     """等工作线程把**新**请求发出去，再把同样参数的一页结果回灌给 state。"""
     wait_calls(api, len(api.calls) + 1, timeout)
     keyword, search_type, offset, limit = api.calls[-1]
-    state._on_page((keyword, search_type, api.build_page(keyword, search_type, offset, limit), None), state._generation)
+    state._on_page(
+        (keyword, search_type, api.build_page(keyword, search_type, offset, limit), None),
+        state.tab(search_type).generation,
+    )
 
 
 def complete_error(state: SearchState, api: FakeApi, message: str = "boom") -> None:
     """等工作线程把请求发出去，再回灌一个失败。"""
     wait_calls(api, 1)
     keyword, search_type, _offset, _limit = api.calls[-1]
-    state._on_page((keyword, search_type, None, RuntimeError(message)), state._generation)
+    state._on_page((keyword, search_type, None, RuntimeError(message)), state.tab(search_type).generation)
 
 
 def state_with(api: FakeApi, *, history=None) -> SearchState:
@@ -173,17 +176,17 @@ class TestStaleResults(unittest.TestCase):
         api = FakeApi()
         state = state_with(api)
         state.search("第一个")
-        first_generation = state._generation
+        first_generation = state.tab(ep.SEARCH_TYPE_SONG).generation
         complete(state, api)  # 先让第一次搜索落地，第二次才不会被 loading 挡住
         state.search("第二个")
-        self.assertGreater(state._generation, first_generation)
+        self.assertGreater(state.tab(ep.SEARCH_TYPE_SONG).generation, first_generation)
         stale = SearchPage(keyword="第一个", search_type=1, offset=0, limit=30, total=75,
                            items=[Song(id=999, name="迟到结果")])
         state._on_page(("第一个", ep.SEARCH_TYPE_SONG, stale, None), first_generation)
         self.assertEqual(state.tab(ep.SEARCH_TYPE_SONG).items, [])
         fresh = SearchPage(keyword="第二个", search_type=1, offset=0, limit=30, total=75,
                            items=[Song(id=1, name="新结果")])
-        state._on_page(("第二个", ep.SEARCH_TYPE_SONG, fresh, None), state._generation)
+        state._on_page(("第二个", ep.SEARCH_TYPE_SONG, fresh, None), state.tab(ep.SEARCH_TYPE_SONG).generation)
         self.assertEqual([s.id for s in state.tab(ep.SEARCH_TYPE_SONG).items], [1])
 
 

@@ -152,7 +152,8 @@ class Api:
             ep.PLAYLIST_DETAIL, {"id": playlist_id, "n": limit, "s": offset, "newStyle": "true"}
         )
         raw = payload.get("playlist") or {}
-        return Playlist.from_api(raw, with_tracks=True)
+        # privileges 是 playlist 的兄弟键（不在 playlist 里），必须从顶层传进去
+        return Playlist.from_api(raw, with_tracks=True, privileges=payload.get("privileges"))
 
     def song_detail(self, song_ids: Sequence[int]) -> list[Song]:
         """批量歌曲详情（收藏列表补全曲目用）。

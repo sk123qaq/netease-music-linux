@@ -84,6 +84,10 @@ class PlaybackController(QObject):
         self._seeked = False
         self._record: tuple | None = None  # (part_path, song_id, level, ext, expected_size)
         self._prefetch: dict[int, SongUrl] = {}
+        #: 取流请求号：同一首歌被反复点（a → b → a）时用来认新旧回包
+        self._fetch_token = 0
+        #: 本次播放里已经失败过的队列索引（防止失败兜底原地打转，见 _auto_next_after_failure）
+        self._failed_indexes: set[int] = set()
         self._liked: dict[int, bool] = {}
         #: 兜底清扫：清掉切歌竞态产生的孤儿临时文件（见 CacheManager.sweep_parts）
         self._sweeper = QTimer(self)
@@ -143,6 +147,7 @@ class PlaybackController(QObject):
             self.error.emit("没有可播放的歌曲")
             return
         index = max(0, min(index, len(items) - 1))
+        self._failed_indexes.clear()
         self.queue.set_items(items, index)
         self.queue_changed.emit()
         if context:
@@ -166,10 +171,10 @@ class PlaybackController(QObject):
     def stop(self) -> None:
         """停下并丢掉当前曲目/队列（登出用）：不再有"当前歌曲"，也不会自动续播。"""
         self.queue.clear()
-        self._liked = set()
+        self._liked = {}
+        self._failed_indexes.clear()
         self._seeked = False
         self._duration_ms = 0
-        self._current = None
         self._playing = False
         try:
             self.player.stop()
@@ -289,6 +294,7 @@ class PlaybackController(QObject):
         cached = self.cache.audio_lookup(song.id)
         if cached is not None:
             _log.info("缓存命中，直接播放本地文件：%s", cached.name)
+            self._failed_indexes.clear()
             self.cache_event.emit(song.id, "hit")
             self.source_changed.emit(song.id, "", 0, "cache")
             self.player.load(str(cached))
@@ -312,34 +318,46 @@ class PlaybackController(QObject):
         触碰播放器/UI 属于未定义行为（见 util/async_task.py 模块头坑 2）。
         """
         self._loading = True
+        self._fetch_token += 1
+        token = self._fetch_token
         _log.info("取流中：%s（id=%s）", song.name, song.id)
 
-        def work() -> tuple[Song, SongUrl | None, Exception | None]:
+        def work() -> tuple:
             try:
-                return song, self.api.song_url_best(song.id), None
+                return token, song, self.api.song_url_best(song.id), None
             except Exception as exc:  # noqa: BLE001 - 统一交给主线程处理
-                return song, None, exc
+                return token, song, None, exc
 
         task = AsyncTask(work)
         task.done.connect(self._on_url_fetched)
         task.start()
 
     def _on_url_fetched(self, payload: tuple) -> None:
-        """取流结果回到主线程后统一处理。"""
-        song, result, exc = payload
+        """取流结果回到主线程后统一处理。
+
+        只认**当前这次**取流：请求号（区分同一首歌被反复点：a → b → a）和歌 id
+        （区分用户切到了别的歌）任一不符就丢弃，而且丢弃必须在任何 emit 之前
+        （否则 b 正在放却弹出 a 的错）。
+        """
+        token, song, result, exc = payload
+        if token != self._fetch_token:
+            _log.debug("丢弃过期的取流回包：token=%s（当前 %s）", token, self._fetch_token)
+            return
         self._loading = False
+        current = self.current_song
+        if current is None or song.id != current.id:
+            _log.debug("丢弃已切歌的取流回包：song=%s（当前 %s）", song.id, current.id if current else None)
+            return
         if exc is not None:
             _log.info("取流失效：%s（%s）", song.name, exc)
             self.error.emit(f"获取播放地址失败：{getattr(exc, 'user_message', exc)}")
-            self._auto_next_after_failure()
+            self._auto_next_after_failure(song)
             return
         assert result is not None
         _log.info("取流结果：%s playable=%s code=%s level=%s", song.name, result.playable, result.code, result.level)
-        if song.id != (self.current_song.id if self.current_song else -1):
-            return  # 期间已切歌，丢弃
         if not result.playable:
             self.error.emit(f"《{song.name}》无法播放：{result.message or '无版权或需要会员'}")
-            self._auto_next_after_failure()
+            self._auto_next_after_failure(song)
             return
         self._play_url(song, result)
 
@@ -354,6 +372,7 @@ class PlaybackController(QObject):
         else:
             self._record = None
         _log.info("开始播放：%s（%s %dkbps，%s）", song.name, result.level or "?", result.br // 1000, "缓存中" if record_to else "不缓存")
+        self._failed_indexes.clear()
         self.source_changed.emit(song.id, result.level, result.br, "cache-part" if record_to else "stream")
         self.player.load(result.url or "", record_to=record_to)
         self._playing = True
@@ -388,13 +407,35 @@ class PlaybackController(QObject):
         if result is not None:
             _log.info("已预取地址：song=%s level=%s", song_id, result.level)
 
-    def _auto_next_after_failure(self) -> None:
-        """播放失败后的兜底：还有下一首就继续，否则停下来（不静默）。"""
-        if self.queue.next_index() is None:
+    def _auto_next_after_failure(self, failed: Song | None = None) -> None:
+        """播放失败后的兜底：往后找一首**这次没失败过**的；都试过了就停下并提示。
+
+        ``failed`` 是失败的那首歌。取流是异步的，回包可能比用户切歌晚到：
+        那不是当前这首的失败，直接丢掉（否则会把正在正常播放的这首算成失败）。
+
+        order 之外的三种模式都能绕回同一个索引（单曲循环/列表循环/随机），
+        所以不能只看“next_index() 不是 None”就继续：所有候选都不可播时会原地重试
+        （真机量到 1 秒 271 次 error 信号 + 272 次 song_changed）。
+        """
+        current = self.current_song
+        if failed is not None and (current is None or failed.id != current.id):
+            _log.debug("丢弃迟到的失败回包：song=%s（当前 %s）", failed.id, current.id if current else None)
+            return
+        if 0 <= self.queue.index < len(self.queue):
+            self._failed_indexes.add(self.queue.index)
+        index = self.queue.next_index()
+        candidate = index is not None and 0 <= index < len(self.queue)
+        if not candidate:
             self._playing = False
             self.playing_changed.emit(False)
-        else:
-            self.next()
+            return
+        if index in self._failed_indexes:
+            self._playing = False
+            self.playing_changed.emit(False)
+            # 单曲失败的具体原因已经由调用方报过，这里只补一句“整列都不行”，不再弹第二个错
+            self.notice.emit("列表里没有可播放的歌曲")
+            return
+        self.next()
 
     # ============================================================ mpv 回调
     def _on_player_ready(self) -> None:

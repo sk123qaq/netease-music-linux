@@ -100,6 +100,9 @@ class MpvPlayer(QObject):
         self._log_file = Path(log_file) if log_file else None
         self._proc: subprocess.Popen | None = None
         self._sock: QLocalSocket | None = None
+        #: 观察到的 mpv 属性（time-pos/duration/pause/eof-reached/path），由 property-change 更新
+        self._eof = False
+        self._path = ""
         self._buffer = b""
         self._req = 0
         self._pending_replies: dict[int, list] = {}
@@ -335,8 +338,10 @@ class MpvPlayer(QObject):
         if event == "property-change":
             self._handle_property(message)
         elif event == "file-loaded":
-            path = str(message.get("playlist_entry_id") or "")
-            self.file_loaded.emit(path)
+            # mpv 的 file-loaded 事件**不带 path**（实测只有 {"event": "file-loaded"}），
+            # 带 playlist_entry_id 的是 start-file。真路径来自我们观察的 path 属性，
+            # 实测在 file-loaded 到达时已经到位（见 tests/test_mpv_ipc.py）。
+            self.file_loaded.emit(self._path)
         elif event == "end-file":
             reason = str(message.get("reason") or "")
             if message.get("error") and reason != "eof":
