@@ -257,7 +257,7 @@ class MainWindow(QMainWindow):
                 songs.sort(key=lambda s: order.get(s.id, len(order)))
                 return request, origin, kind, songs, detail.name, detail.creator
             except Exception as exc:  # noqa: BLE001 - 交给主线程统一提示
-                return request, origin, kind, exc, "", ""  # type: ignore[return-value]
+                return request, origin, kind, exc, "", ""
 
         task = AsyncTask(work)
         task.done.connect(self._on_entity_loaded)
