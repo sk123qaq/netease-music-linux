@@ -315,6 +315,16 @@ class SearchView(QWidget):
         self.input.returnPressed.connect(self._do_search)
         self.input.textEdited.connect(self._maybe_show_history)
         self.input.installEventFilter(self)
+        for search_type, button in self.tab_buttons.items():
+            button.clicked.connect(lambda _checked=False, t=search_type: self._switch_tab(t))
+        for search_type, table in self._tables.items():
+            table.reached_bottom.connect(lambda t=search_type: self.state.load_more(t))
+            table.cellDoubleClicked.connect(lambda row, col, t=search_type: self._on_row_activated(t, row))
+            table.itemSelectionChanged.connect(lambda t=search_type: self._clear_selection(t))
+        self.state.page_loaded.connect(self._on_page_loaded)
+        self.state.loading_changed.connect(self._on_loading_changed)
+        self.state.search_failed.connect(self._on_failed)
+        self.history_popup.itemClicked.connect(self._on_history_clicked)
         # 真机踩过：历史下拉用 Qt.Popup 会**抢走鼠标**
         # （现象：点"我喜欢的音乐"没反应，只能点搜索框或某条历史）。
         # 现在改成非模态工具窗 + "点在别处就关"（见 showEvent/hideEvent/eventFilter）。
@@ -336,17 +346,6 @@ class SearchView(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.removeEventFilter(self)
-        for search_type, button in self.tab_buttons.items():
-            button.clicked.connect(lambda _checked=False, t=search_type: self._switch_tab(t))
-        for search_type, table in self._tables.items():
-            table.reached_bottom.connect(lambda t=search_type: self.state.load_more(t))
-            table.cellDoubleClicked.connect(lambda row, col, t=search_type: self._on_row_activated(t, row))
-            table.itemSelectionChanged.connect(lambda t=search_type: self._clear_selection(t))
-
-        self.state.page_loaded.connect(self._on_page_loaded)
-        self.state.loading_changed.connect(self._on_loading_changed)
-        self.state.search_failed.connect(self._on_failed)
-        self.history_popup.itemClicked.connect(self._on_history_clicked)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.input and event.type() == QEvent.FocusIn:
