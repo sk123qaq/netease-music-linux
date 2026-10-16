@@ -84,6 +84,8 @@ class PlaybackController(QObject):
         self._seeked = False
         self._record: tuple | None = None  # (part_path, song_id, level, ext, expected_size)
         self._prefetch: dict[int, SongUrl] = {}
+        #: 取流请求号：同一首歌被反复点（a → b → a）时用来认新旧回包
+        self._fetch_token = 0
         #: 本次播放里已经失败过的队列索引（防止失败兜底原地打转，见 _auto_next_after_failure）
         self._failed_indexes: set[int] = set()
         self._liked: dict[int, bool] = {}
@@ -316,22 +318,36 @@ class PlaybackController(QObject):
         触碰播放器/UI 属于未定义行为（见 util/async_task.py 模块头坑 2）。
         """
         self._loading = True
+        self._fetch_token += 1
+        token = self._fetch_token
         _log.info("取流中：%s（id=%s）", song.name, song.id)
 
-        def work() -> tuple[Song, SongUrl | None, Exception | None]:
+        def work() -> tuple:
             try:
-                return song, self.api.song_url_best(song.id), None
+                return token, song, self.api.song_url_best(song.id), None
             except Exception as exc:  # noqa: BLE001 - 统一交给主线程处理
-                return song, None, exc
+                return token, song, None, exc
 
         task = AsyncTask(work)
         task.done.connect(self._on_url_fetched)
         task.start()
 
     def _on_url_fetched(self, payload: tuple) -> None:
-        """取流结果回到主线程后统一处理。"""
-        song, result, exc = payload
+        """取流结果回到主线程后统一处理。
+
+        只认**当前这次**取流：请求号（区分同一首歌被反复点：a → b → a）和歌 id
+        （区分用户切到了别的歌）任一不符就丢弃，而且丢弃必须在任何 emit 之前
+        （否则 b 正在放却弹出 a 的错）。
+        """
+        token, song, result, exc = payload
+        if token != self._fetch_token:
+            _log.debug("丢弃过期的取流回包：token=%s（当前 %s）", token, self._fetch_token)
+            return
         self._loading = False
+        current = self.current_song
+        if current is None or song.id != current.id:
+            _log.debug("丢弃已切歌的取流回包：song=%s（当前 %s）", song.id, current.id if current else None)
+            return
         if exc is not None:
             _log.info("取流失效：%s（%s）", song.name, exc)
             self.error.emit(f"获取播放地址失败：{getattr(exc, 'user_message', exc)}")
@@ -339,8 +355,6 @@ class PlaybackController(QObject):
             return
         assert result is not None
         _log.info("取流结果：%s playable=%s code=%s level=%s", song.name, result.playable, result.code, result.level)
-        if song.id != (self.current_song.id if self.current_song else -1):
-            return  # 期间已切歌，丢弃
         if not result.playable:
             self.error.emit(f"《{song.name}》无法播放：{result.message or '无版权或需要会员'}")
             self._auto_next_after_failure(song)
