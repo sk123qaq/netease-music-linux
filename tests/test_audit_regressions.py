@@ -343,8 +343,7 @@ class TestSearchTabGeneration(unittest.TestCase):
 
     @staticmethod
     def _generation(state: SearchState, search_type: int) -> int:
-        tab = state.tab(search_type)
-        return getattr(tab, "generation", state._generation)  # 修复前回落到全局号
+        return state.tab(search_type).generation
 
     @staticmethod
     def _page(keyword: str, search_type: int, songs: list[Song]) -> SearchPage:

@@ -32,6 +32,8 @@ class TabState:
     offset: int = 0
     loading: bool = False
     finished: bool = False
+    #: 该 tab 自己的请求号：只认最新一次请求的回包（清空/换关键词也会 +1 作废旧回包）
+    generation: int = 0
     #: 已加载的 id 集合（去重用）
     _seen: set = field(default_factory=set)
 
@@ -44,7 +46,9 @@ class TabState:
 
     def reset(self) -> None:
         self.items, self.total, self.offset, self.finished = [], 0, 0, False
+        self.loading = False
         self._seen.clear()
+        self.generation += 1
 
 
 class SearchState(QObject):
@@ -65,7 +69,6 @@ class SearchState(QObject):
         self.history = history
         self.keyword = ""
         self.tabs: dict[int, TabState] = {t: TabState() for t in ep.SEARCH_TYPE_LABELS}
-        self._generation = 0
         self._searched_keyword = ""
         self.page_size = config.SEARCH_PAGE_SIZE
 
@@ -101,8 +104,7 @@ class SearchState(QObject):
                 tab.reset()
         else:
             state.reset()
-        self._generation += 1
-        self._load_page(keyword, search_type, 0, self._generation)
+        self._load_page(keyword, search_type, 0)
 
     def load_more(self, search_type: int) -> None:
         """滚动到底部时加载下一页。"""
@@ -116,8 +118,7 @@ class SearchState(QObject):
             state.finished = True
             self.loading_changed.emit(search_type, False, True)
             return
-        self._generation += 1
-        self._load_page(keyword, search_type, state.offset, self._generation)
+        self._load_page(keyword, search_type, state.offset)
 
     def clear(self, search_type: int | None = None) -> None:
         """清空结果（换 tab/清空搜索框时用）。"""
@@ -129,8 +130,12 @@ class SearchState(QObject):
         self.keyword = ""
 
     # ============================================================ 内部
-    def _load_page(self, keyword: str, search_type: int, offset: int, generation: int) -> None:
+    def _load_page(self, keyword: str, search_type: int, offset: int) -> None:
         state = self.tab(search_type)
+        # 请求号挂在 tab 上，不共用一个全局号：同关键词下另一个 tab 发请求
+        # 不能把本 tab 的有效回包当成“过期”丢掉。
+        state.generation += 1
+        generation = state.generation
         state.loading = True
         state.offset = offset
         self.loading_changed.emit(search_type, True, False)
@@ -149,10 +154,10 @@ class SearchState(QObject):
     def _on_page(self, payload: tuple, generation: int) -> None:
         keyword, search_type, page, exc = payload
         state = self.tab(search_type)
-        state.loading = False
-        if generation != self._generation:
+        if generation != state.generation or keyword != self.keyword:
             _log.debug("丢弃过期搜索结果：%s/%s", keyword, search_type)
             return
+        state.loading = False
         if exc is not None or page is None:
             message = getattr(exc, "user_message", str(exc)) if exc else "搜索失败"
             _log.info("搜索失败：%s（%s）", keyword, message)
